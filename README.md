@@ -89,7 +89,7 @@ matter, keep the TTL short for that entity or read it from Postgres.
 ## Runtime
 
 `may` coroutines throughout (`may_postgres`, `may_redis`). `Cargo.toml` patches `may` to the
-microscaler fork that `may_redis` uses, so the process has one scheduler.
+microscaler fork (`master`) that `may_redis` uses, so the process has one scheduler.
 
 ## Tests
 
