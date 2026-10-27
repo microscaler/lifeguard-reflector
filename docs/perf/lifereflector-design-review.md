@@ -16,8 +16,9 @@ component, not any one application's tables.
 > covers the old leader's watermark), catch-up after gaps (ranged by a change column, or a
 > per-table flush), refusal of a `noeviction` Redis, and `lifereflector_*` metrics. The `may` /
 > `may_redis` double scheduler is resolved by patching `may` to the fork workspace-wide (the fork is
-> crates.io 0.3.51 plus one additive API). Still open: a notification wake-up in `may_postgres`
-> (the reflector polls its queue every 500 µs), multi-region fan-out (§5.4), and deployment. The
+> crates.io 0.3.51 plus one additive API). The reflector now blocks on `may_postgres`'s
+> `Client::next_notification` instead of polling its queue. Still open: multi-region fan-out
+> (§5.4), and deployment. The
 > crate's README is the current description; sections 1–2 below describe the state before it.
 
 ## 1. What the design says
@@ -56,8 +57,8 @@ and the LLM wiki page `docs/llmwiki/topics/reflector-cache-and-coherence.md`. In
 on a 24-core dev box against local Postgres 16 and Redis 7 (see the baseline doc for the numbers):
 
 * **Paced writes** (500/s, one writer): commit → Redis write p50 ≈ 0.8 ms, p99 ≈ 2.9 ms in both modes.
-  About 200 µs of that is the queue poll interval (`PERF_REFLECT_POLL_US`), which only exists because
-  the driver has no wake-up.
+  About 200 µs of that was the queue poll interval (`PERF_REFLECT_POLL_US`), which only existed because
+  the driver had no wake-up; the listener now blocks on `next_notification`.
 * **Burst** (16 writers, ≈ 78k inserts/s):
   * **per-key** (the README's design: one `SELECT` and one `SET` per notification) reflected only
     ≈ 7k/s. Lag grew without bound: p50 12 s, p99 37 s, still draining after 30 s.

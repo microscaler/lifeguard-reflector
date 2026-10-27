@@ -489,7 +489,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "may"
 version = "0.3.51"
-source = "git+https://github.com/microscaler/may.git?branch=may-sleep#92d225140b993b58bbe0a075805eff505b151b1f"
+source = "git+https://github.com/microscaler/may.git?branch=may-sleep#d74595bc4d5955c636826766517ce6f04cdd44f6"
 dependencies = [
  "cfg-if",
  "core_affinity",
@@ -543,7 +543,7 @@ dependencies = [
 [[package]]
 name = "may_queue"
 version = "0.1.23"
-source = "git+https://github.com/microscaler/may.git?branch=may-sleep#92d225140b993b58bbe0a075805eff505b151b1f"
+source = "git+https://github.com/microscaler/may.git?branch=may-sleep#d74595bc4d5955c636826766517ce6f04cdd44f6"
 dependencies = [
  "crossbeam-utils",
  "rustversion",

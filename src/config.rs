@@ -51,8 +51,6 @@ pub struct Config {
     pub batch_max: usize,
     /// How long to let a non-full batch gather before flushing (0: flush when the queue drains).
     pub batch_delay: Duration,
-    /// Sleep between notification-queue polls when idle (`may_postgres` has no wake-up).
-    pub poll_interval: Duration,
     /// Postgres/Redis liveness check and standby lock-retry period.
     pub heartbeat: Duration,
     /// Keys held while Redis is failing before the reflector gives up on them and schedules a
@@ -96,7 +94,6 @@ impl Config {
             lock_key: DEFAULT_LOCK_KEY,
             batch_max: 512,
             batch_delay: Duration::ZERO,
-            poll_interval: Duration::from_micros(500),
             heartbeat: Duration::from_secs(2),
             max_pending: 200_000,
             asserted_eviction_policy: None,
@@ -110,7 +107,7 @@ impl Config {
     /// `LIFEREFLECTOR_CHANNELS` (comma list), `LIFEREFLECTOR_KEY_PREFIX`,
     /// `LIFEREFLECTOR_TABLES` (`table` for flush catch-up, `table=column` for ranged),
     /// `LIFEREFLECTOR_WATERMARK_KEY`, `LIFEREFLECTOR_CATCHUP_SLACK_MS`, `LIFEREFLECTOR_LOCK_KEY`,
-    /// `LIFEREFLECTOR_BATCH_MAX`, `LIFEREFLECTOR_BATCH_DELAY_MS`, `LIFEREFLECTOR_POLL_US`,
+    /// `LIFEREFLECTOR_BATCH_MAX`, `LIFEREFLECTOR_BATCH_DELAY_MS`,
     /// `LIFEREFLECTOR_HEARTBEAT_MS`, `LIFEREFLECTOR_MAX_PENDING`,
     /// `LIFEREFLECTOR_REDIS_EVICTION_POLICY`, `LIFEREFLECTOR_METRICS_ADDR` (`off` disables).
     ///
@@ -181,9 +178,6 @@ impl Config {
         }
         if let Some(v) = num("LIFEREFLECTOR_BATCH_DELAY_MS")? {
             c.batch_delay = Duration::from_millis(v);
-        }
-        if let Some(v) = num("LIFEREFLECTOR_POLL_US")? {
-            c.poll_interval = Duration::from_micros(v.max(50));
         }
         if let Some(v) = num("LIFEREFLECTOR_HEARTBEAT_MS")? {
             c.heartbeat = Duration::from_millis(v.max(100));

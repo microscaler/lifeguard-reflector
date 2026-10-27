@@ -273,6 +273,12 @@ impl Engine {
         metrics().pending.set(0);
     }
 
+    /// When a non-full batch becomes due by waiting out `batch_delay`; `None` with nothing pending.
+    #[must_use]
+    pub fn batch_due_at(&self) -> Option<Instant> {
+        self.first_at.map(|t| t + self.cfg.batch_delay)
+    }
+
     /// `true` when the leader should flush now: the batch is full, or it has waited
     /// `batch_delay`. With `queue_drained`, a zero delay flushes immediately.
     #[must_use]

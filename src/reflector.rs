@@ -165,7 +165,7 @@ fn session(
         if client.is_closed() {
             return Err("connection closed while standby".into());
         }
-        may::coroutine::sleep(cfg.poll_interval.max(Duration::from_millis(20)));
+        wait_for_notification(&client, engine, next_try);
     }
     metrics().leader.set(1);
     log::info!("lifereflector: acquired leadership");
@@ -193,6 +193,23 @@ fn drain(client: &may_postgres::Client, engine: &mut Engine, max: usize) -> usiz
         n += 1;
     }
     n
+}
+
+/// Longest single idle wait, so a stop request or a dead connection is noticed promptly.
+const IDLE_WAIT_MAX: Duration = Duration::from_millis(50);
+
+/// Block until a notification arrives (it is handed to the engine) or `until` passes, capped at
+/// [`IDLE_WAIT_MAX`]. The connection wakes the waiter on delivery, so there is no polling.
+fn wait_for_notification(client: &may_postgres::Client, engine: &mut Engine, until: Instant) {
+    let left = until
+        .saturating_duration_since(Instant::now())
+        .min(IDLE_WAIT_MAX);
+    if left.is_zero() {
+        return;
+    }
+    if let Some(note) = client.next_notification(left) {
+        engine.push_payload(note.payload());
+    }
 }
 
 fn ranged_query(
@@ -287,12 +304,20 @@ fn lead(
             return Err("connection closed while leading".into());
         }
         if engine.needs_catch_up() && cache_ready {
-            // More catch-up work: no idle sleep.
+            // More catch-up work: no idle wait.
         } else if got == 0 && (engine.is_empty() || !cache_ready) {
-            may::coroutine::sleep(cfg.poll_interval);
+            let until = if cache_ready {
+                next_beat
+            } else {
+                next_beat.min(cache_retry_at)
+            };
+            wait_for_notification(client, engine, until);
         } else if got == 0 && !engine.due(true) {
             // Waiting out batch_delay.
-            may::coroutine::sleep(cfg.poll_interval);
+            let until = engine
+                .batch_due_at()
+                .map_or(next_beat, |t| t.min(next_beat));
+            wait_for_notification(client, engine, until);
         }
         debug_assert_eq!(engine.role(), Role::Leader);
     }

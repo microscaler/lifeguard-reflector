@@ -70,7 +70,6 @@ matter, keep the TTL short for that entity or read it from Postgres.
 | `LIFEREFLECTOR_LOCK_KEY` | fixed | advisory lock key; one active reflector per key |
 | `LIFEREFLECTOR_BATCH_MAX` | 512 | keys per batch |
 | `LIFEREFLECTOR_BATCH_DELAY_MS` | 0 | extra wait to grow a batch (0: flush when the queue drains) |
-| `LIFEREFLECTOR_POLL_US` | 500 | idle poll of the notification queue |
 | `LIFEREFLECTOR_HEARTBEAT_MS` | 2000 | liveness check and standby lock retry |
 | `LIFEREFLECTOR_MAX_PENDING` | 200000 | keys held while Redis fails before falling back to catch-up |
 | `LIFEREFLECTOR_REDIS_EVICTION_POLICY` | none | operator-stated policy when `CONFIG GET` is refused |
