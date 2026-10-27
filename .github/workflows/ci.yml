@@ -16,7 +16,7 @@ jobs:
     name: Lint (fmt, clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.0"
@@ -57,7 +57,7 @@ jobs:
       LIFEREFLECTOR_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       LIFEREFLECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.0"
