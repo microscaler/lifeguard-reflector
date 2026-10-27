@@ -3,9 +3,8 @@ name = "lifeguard-reflector"
 version = "0.1.0"
 edition = "2021"
 license = "FSL-1.1-ALv2"
-repository = "https://github.com/microscaler/lifeguard"
+repository = "https://github.com/microscaler/lifeguard-reflector"
 description = "LifeReflector: Postgres LISTEN/NOTIFY to Redis cache invalidation for Lifeguard entities"
-authors = ["Microscaler, Inc. <enterprise@microscaler.io>"]
 
 [lib]
 path = "src/lib.rs"
@@ -15,8 +14,8 @@ name = "lifereflector"
 path = "src/main.rs"
 
 [dependencies]
-# Resolved through the workspace `[patch.crates-io]` to the same `may` that may_redis uses: one
-# scheduler for the whole process.
+# Resolved through `[patch.crates-io]` below to the same `may` that may_redis uses: one scheduler
+# for the whole process.
 may = "0.3"
 may_postgres = { git = "https://github.com/microscaler/may_postgres.git", rev = "9c55df03d536a57b2d52b09132696e34121d36d6" }
 may-redis = { git = "https://github.com/microscaler/may_redis.git", rev = "3d103853434029dee22620196af44bb2a8bf8266" }
@@ -28,3 +27,10 @@ prometheus = { version = "0.14", default-features = false }
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
+# One `may` for the whole process. `may_redis` builds on the microscaler fork's `may-sleep` branch
+# (crates.io may 0.3.51 plus `spsc::Receiver::recv_with_timeout`); without this patch the graph
+# holds two `may` crates and therefore two schedulers, and coroutines from one block the other's
+# workers. Must name the same git URL and branch as may_redis so Cargo sees one source. Drop when
+# the API lands in a may release.
+[patch.crates-io]
+may = { git = "https://github.com/microscaler/may.git", branch = "may-sleep" }

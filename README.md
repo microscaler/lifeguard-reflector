@@ -19,7 +19,8 @@ readers: GET key → miss → read Postgres → SET key (with a TTL)
   limit (a full-row payload makes the writing INSERT fail on wide rows):
   `{"table": "items", "op": "UPDATE", "id": 42, "v": <WAL position>, "ts": <ms since epoch>}`.
   `v` is monotonic per key (row locks order writes to one row); `ts` drives the lag metric and the
-  catch-up watermark.
+  catch-up watermark. The payload is a versioned open contract, documented in Lifeguard's
+  [`docs/NOTIFY_CONTRACT.md`](https://github.com/microscaler/lifeguard/blob/main/docs/NOTIFY_CONTRACT.md).
 - **One active instance.** Each instance connects directly to Postgres (not through PgBouncer in
   transaction mode: LISTEN and session advisory locks need a dedicated session), issues `LISTEN`,
   then contends for `pg_try_advisory_lock(LIFEREFLECTOR_LOCK_KEY)`. The holder leads; the others
@@ -88,29 +89,33 @@ matter, keep the TTL short for that entity or read it from Postgres.
 
 ## Runtime
 
-`may` coroutines throughout (`may_postgres`, `may_redis`). The workspace patches `may` to the
-microscaler fork that `may_redis` uses, so the process has one scheduler; see the root
-`Cargo.toml`.
+`may` coroutines throughout (`may_postgres`, `may_redis`). `Cargo.toml` patches `may` to the
+microscaler fork that `may_redis` uses, so the process has one scheduler.
 
 ## Tests
 
-Unit tests run with `cargo test -p lifeguard-reflector`. The end-to-end tests need a disposable
+Unit tests run with `cargo test`. The end-to-end tests need a disposable
 Postgres and Redis:
 
 ```sh
 LIFEREFLECTOR_TEST_PG_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \
 LIFEREFLECTOR_TEST_REDIS_URL=redis://127.0.0.1:6379 \
-cargo test -p lifeguard-reflector --test live
+cargo test --test live
 ```
 
 They cover batched invalidation, a single active leader with gapless failover to a standby,
-ranged and flush catch-up after downtime, and the `noeviction` refusal.
+ranged and flush catch-up after downtime, and the `noeviction` refusal. CI runs them against
+Postgres 16 and Redis 7 service containers.
+
+## Performance
+
+End-to-end measurements and the design review are in [`docs/perf/`](docs/perf/).
 
 ## Licence
 
-LifeReflector (`lifeguard-reflector`) is source-available under the
+LifeReflector is source-available under the
 [Functional Source License, Version 1.1, ALv2 Future License](LICENSE)
-(SPDX `FSL-1.1-ALv2`), copyright 2026 Microscaler. Any use other than a competing
-product or service is permitted. Each version converts to the Apache License,
-Version 2.0 two years after it is released. The rest of the Lifeguard workspace is
-MIT OR Apache-2.0.
+(FSL-1.1-Apache-2.0; SPDX identifier `FSL-1.1-ALv2`), copyright 2026 Microscaler.
+Any use other than a competing product or service is permitted. Each version
+converts to the Apache License, Version 2.0 two years after it is released.
+[Lifeguard](https://github.com/microscaler/lifeguard) itself is MIT OR Apache-2.0.
