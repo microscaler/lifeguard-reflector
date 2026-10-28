@@ -17,7 +17,7 @@ path = "src/main.rs"
 # Resolved through `[patch.crates-io]` below to the same `may` that may_redis uses: one scheduler
 # for the whole process.
 may = "0.3"
-may_postgres = { git = "https://github.com/microscaler/may_postgres.git", rev = "cb92eff897539ebf5c1ac2b5d533b57b48342fee" }
+may_postgres = { git = "https://github.com/microscaler/may_postgres.git", branch = "integration/microscaler-fork" }
 may-redis = { git = "https://github.com/microscaler/may_redis.git", rev = "3889ac42dfe7b9e8e4ae984dccc3936193a24379" }
 serde_json = "1.0"
 log = "0.4"
