@@ -467,6 +467,7 @@ dependencies = [
  "may",
  "may-redis",
  "may_postgres",
+ "microscaler-timing",
  "prometheus",
  "serde_json",
 ]
@@ -573,6 +574,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "microscaler-timing"
+version = "0.1.0"
+source = "git+https://github.com/microscaler/microscaler-observability.git?branch=main#feb690dc81be8d6fce920c5088ead03c483b82af"
+dependencies = [
+ "microscaler-timing-macros",
+]
+
+[[package]]
+name = "microscaler-timing-macros"
+version = "0.1.0"
+source = "git+https://github.com/microscaler/microscaler-observability.git?branch=main#feb690dc81be8d6fce920c5088ead03c483b82af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

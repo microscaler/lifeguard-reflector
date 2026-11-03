@@ -178,7 +178,10 @@ impl Metrics {
     pub fn scrape_text(&self) -> String {
         let mut buf = Vec::new();
         let _ = TextEncoder::new().encode(&self.registry.gather(), &mut buf);
-        String::from_utf8(buf).unwrap_or_default()
+        let mut text = String::from_utf8(buf).unwrap_or_default();
+        // op_duration_seconds: flush and NOTIFY-to-applied (engine.rs), plus anything else timed.
+        microscaler_timing::render_prometheus(&mut text);
+        text
     }
 }
 

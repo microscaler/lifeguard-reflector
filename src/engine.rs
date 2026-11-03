@@ -18,6 +18,12 @@
 
 use crate::config::{CatchUp, Config, TableSpec};
 use crate::metrics::metrics;
+use microscaler_timing::{Outcome, Site};
+
+/// One invalidation batch's round trip to the cache (`op_duration_seconds`).
+static FLUSH: Site = Site::new("lifereflector", "flush");
+/// From the first NOTIFY of a batch being received to its invalidation applied in the cache.
+static NOTIFY_TO_APPLIED: Site = Site::new("lifereflector", "notify_to_applied");
 use crate::payload::{self, Change, Op};
 use crate::sink::{CacheSink, SinkError};
 use std::collections::{HashMap, HashSet};
@@ -304,6 +310,7 @@ impl Engine {
         }
         let m = metrics();
         let t = Instant::now();
+        let flush_timer = FLUSH.start();
         let result = (|| {
             for table in &self.pending_tables {
                 let n = self.sink.invalidate_matching(&self.table_pattern(table))?;
@@ -314,9 +321,18 @@ impl Engine {
             m.keys_present.inc_by(n);
             Ok::<usize, SinkError>(keys.len())
         })();
+        flush_timer.finish(if result.is_ok() {
+            Outcome::Ok
+        } else {
+            Outcome::Err
+        });
         match result {
             Ok(n) => {
                 m.flushes.with_label_values(&["ok"]).inc();
+                if let Some(received) = self.first_at {
+                    // NOTIFY received (the batch's first) to the invalidation applied in Redis.
+                    NOTIFY_TO_APPLIED.record(Outcome::Ok, received.elapsed());
+                }
                 #[allow(clippy::cast_precision_loss)]
                 m.batch_size.observe(n as f64);
                 m.keys_invalidated.inc_by(n as u64);
@@ -663,6 +679,38 @@ mod tests {
         assert_eq!(e.flush().unwrap(), 1);
         assert!(!s.contains("lg:t:1"));
         assert_eq!(e.consecutive_failures(), 0);
+    }
+
+    #[test]
+    fn flush_is_timed_and_notify_to_applied_counts_successes_only() {
+        use microscaler_timing::Outcome::{Err as Failed, Ok as Done};
+        let count = |op: &str, outcome: microscaler_timing::Outcome| {
+            microscaler_timing::snapshot()
+                .into_iter()
+                .filter(|r| r.component == "lifereflector" && r.op == op && r.outcome == outcome)
+                .map(|r| r.count())
+                .sum::<u64>()
+        };
+        // Other tests flush concurrently in this process: counts only ever grow by at least ours.
+        let (applied, flush_ok, flush_err) = (
+            count("notify_to_applied", Done),
+            count("flush", Done),
+            count("flush", Failed),
+        );
+        let (mut e, s) = engine(cfg(|_| {}));
+        e.take_over().unwrap();
+        e.push(&change("t", "9", 5));
+        s.set_failing(Some("down"));
+        assert!(e.flush().is_err());
+        s.set_failing(None);
+        assert_eq!(e.flush().unwrap(), 1);
+        assert!(count("flush", Failed) > flush_err);
+        assert!(count("flush", Done) > flush_ok);
+        assert!(count("notify_to_applied", Done) > applied);
+        let text = crate::metrics::metrics().scrape_text();
+        assert!(text.contains(
+            r#"op_duration_seconds_count{component="lifereflector",op="flush",outcome="ok"}"#
+        ));
     }
 
     #[test]
