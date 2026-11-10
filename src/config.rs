@@ -53,6 +53,9 @@ pub struct Config {
     pub batch_delay: Duration,
     /// Postgres/Redis liveness check and standby lock-retry period.
     pub heartbeat: Duration,
+    /// Longest the leader lets the cache connection sit idle before a `PING`, so the first flush
+    /// after a quiet spell never pays for a cold connection.
+    pub cache_keepalive: Duration,
     /// Keys held while Redis is failing before the reflector gives up on them and schedules a
     /// catch-up instead (bounds memory during a Redis outage).
     pub max_pending: usize,
@@ -95,6 +98,7 @@ impl Config {
             batch_max: 512,
             batch_delay: Duration::ZERO,
             heartbeat: Duration::from_secs(2),
+            cache_keepalive: Duration::from_secs(2),
             max_pending: 200_000,
             asserted_eviction_policy: None,
             metrics_addr: Some("0.0.0.0:9187".into()),
@@ -181,6 +185,9 @@ impl Config {
         }
         if let Some(v) = num("LIFEREFLECTOR_HEARTBEAT_MS")? {
             c.heartbeat = Duration::from_millis(v.max(100));
+        }
+        if let Some(v) = num("LIFEREFLECTOR_CACHE_KEEPALIVE_MS")? {
+            c.cache_keepalive = Duration::from_millis(v.max(100));
         }
         if let Some(v) = num("LIFEREFLECTOR_MAX_PENDING")? {
             c.max_pending = usize::try_from(v.max(1)).unwrap_or(usize::MAX);

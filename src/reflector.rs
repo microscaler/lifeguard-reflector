@@ -187,6 +187,11 @@ fn session(
             log::warn!("lifereflector: reading watermark failed ({e}); catch-up scheduled");
         }
     }
+    // Leading starts with a connection that has just done a round trip (connect and AUTH included),
+    // not with whatever the standby's connection has become while it waited.
+    if !warm_cache(engine, connect_sink, Duration::ZERO) {
+        log::warn!("lifereflector: cache unreachable on take-over; flushes retry with backoff");
+    }
     lead(cfg, &client, engine, connect_sink, stop)
 }
 
@@ -277,7 +282,15 @@ fn lead(
                 );
             }
         }
-        let cache_ready = Instant::now() >= cache_retry_at;
+        let mut cache_ready = Instant::now() >= cache_retry_at;
+        // Never let the connection idle into a cold first flush: ping it when quiet, and on a
+        // failed ping reconnect now rather than on the next flush.
+        if cache_ready && !stopping && !warm_cache(engine, connect_sink, cfg.cache_keepalive) {
+            cache_backoff =
+                (cache_backoff * 2).clamp(Duration::from_millis(50), Duration::from_secs(5));
+            cache_retry_at = Instant::now() + cache_backoff;
+            cache_ready = false;
+        }
         if cache_ready && (engine.due(drained) || (stopping && !engine.is_empty())) {
             match engine.flush() {
                 Ok(_) => cache_backoff = Duration::ZERO,
@@ -341,13 +354,34 @@ fn cache_failed(
     *backoff = (*backoff * 2).clamp(Duration::from_millis(50), Duration::from_secs(5));
     *retry_at = Instant::now() + *backoff;
     if engine.consecutive_failures() >= 3 || engine.needs_catch_up() {
-        match connect_sink() {
-            Ok(s) => {
-                metrics().reconnects.with_label_values(&["redis"]).inc();
-                log::info!("lifereflector: event=reconnect target=redis");
-                engine.set_sink(s);
-            }
-            Err(e) => log::warn!("lifereflector: event=reconnect target=redis failed: {e}"),
+        reconnect(engine, connect_sink);
+    }
+}
+
+/// Replace the cache connection. `false` when the new one could not be made.
+fn reconnect(engine: &mut Engine, connect_sink: &SinkFactory) -> bool {
+    match connect_sink() {
+        Ok(s) => {
+            metrics().reconnects.with_label_values(&["redis"]).inc();
+            log::info!("lifereflector: event=reconnect target=redis");
+            engine.set_sink(s);
+            true
+        }
+        Err(e) => {
+            log::warn!("lifereflector: event=reconnect target=redis failed: {e}");
+            false
+        }
+    }
+}
+
+/// Ping the cache when it has been idle for `every` (always with `Duration::ZERO`); when the ping
+/// fails, reconnect at once and ping the new connection. `false` when the cache is unreachable.
+fn warm_cache(engine: &mut Engine, connect_sink: &SinkFactory, every: Duration) -> bool {
+    match engine.keep_warm(every) {
+        Ok(_) => true,
+        Err(e) => {
+            log::warn!("lifereflector: event=cache_keepalive_failed {e}");
+            reconnect(engine, connect_sink) && engine.keep_warm(Duration::ZERO).is_ok()
         }
     }
 }
@@ -389,6 +423,26 @@ mod tests {
         let mut s = MemorySink::new();
         s.policy = Some("noeviction".into());
         assert!(check_eviction_policy(&s, &cfg).is_err());
+    }
+
+    #[test]
+    fn failed_keepalive_reconnects_before_any_flush() {
+        let dead = MemorySink::new();
+        dead.set_failing(Some("connection reset"));
+        let mut e = Engine::new(Arc::new(Config::new("pg", "r")), Box::new(dead));
+        let fresh = || -> Result<Box<dyn CacheSink>, SinkError> { Ok(Box::new(MemorySink::new())) };
+        assert!(warm_cache(&mut e, &fresh, Duration::ZERO));
+        assert!(e.sink().ping().is_ok(), "the dead connection was replaced");
+        assert_eq!(e.consecutive_failures(), 0);
+
+        let dead = MemorySink::new();
+        dead.set_failing(Some("connection reset"));
+        let mut e = Engine::new(Arc::new(Config::new("pg", "r")), Box::new(dead));
+        let down = || -> Result<Box<dyn CacheSink>, SinkError> { Err(SinkError("refused".into())) };
+        assert!(
+            !warm_cache(&mut e, &down, Duration::ZERO),
+            "unreachable cache reported"
+        );
     }
 
     #[test]

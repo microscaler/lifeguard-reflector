@@ -5,7 +5,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // `may` logs every epoll registration at INFO ("add fd to epoll select"): scheduler noise that
+    // drowned the event lines. It is held at WARN unless RUST_LOG names `may` itself.
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .filter_module("may", log::LevelFilter::Warn)
+        .parse_env(env_logger::Env::default())
+        .init();
     let cfg = match Config::from_env() {
         Ok(c) => c,
         Err(e) => {

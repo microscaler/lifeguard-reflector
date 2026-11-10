@@ -19,6 +19,8 @@ pub struct Metrics {
     pub invalid_payloads: IntCounter,
     /// Events folded into an earlier event for the same key within a batch.
     pub coalesced: IntCounter,
+    /// Keep-alive pings sent to the cache (`lifereflector_cache_pings_total`).
+    pub cache_pings: IntCounter,
     /// Keys sent to the cache for invalidation.
     pub keys_invalidated: IntCounter,
     /// Invalidated keys that were actually cached.
@@ -138,6 +140,11 @@ impl Metrics {
                 &r,
                 "lifereflector_coalesced_total",
                 "Notifications folded into an earlier one for the same key in a batch",
+            ),
+            cache_pings: counter(
+                &r,
+                "lifereflector_cache_pings_total",
+                "Keep-alive pings sent to the cache (it never idles into a cold first flush)",
             ),
             keys_invalidated: counter(
                 &r,

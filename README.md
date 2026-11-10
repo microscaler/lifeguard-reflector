@@ -71,6 +71,7 @@ matter, keep the TTL short for that entity or read it from Postgres.
 | `LIFEREFLECTOR_BATCH_MAX` | 512 | keys per batch |
 | `LIFEREFLECTOR_BATCH_DELAY_MS` | 0 | extra wait to grow a batch (0: flush when the queue drains) |
 | `LIFEREFLECTOR_HEARTBEAT_MS` | 2000 | liveness check and standby lock retry |
+| `LIFEREFLECTOR_CACHE_KEEPALIVE_MS` | 2000 | longest the leader lets the Redis connection idle before a `PING` (it is also pinged on take-over; a failed ping reconnects at once) |
 | `LIFEREFLECTOR_MAX_PENDING` | 200000 | keys held while Redis fails before falling back to catch-up |
 | `LIFEREFLECTOR_REDIS_EVICTION_POLICY` | none | operator-stated policy when `CONFIG GET` is refused |
 | `LIFEREFLECTOR_METRICS_ADDR` | `0.0.0.0:9187` | `/metrics`, `/healthz`; `off` disables |

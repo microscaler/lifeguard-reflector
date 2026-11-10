@@ -91,6 +91,8 @@ pub struct Engine {
     tables: Vec<crate::metrics::TableMetrics>,
     /// Leader: oldest trigger ts of each table in the pending batch.
     batch_oldest: Vec<Option<i64>>,
+    /// When the sink last completed a round trip (flush, watermark write, keep-alive ping).
+    sink_used: Instant,
 }
 
 /// One unit of catch-up work.
@@ -141,6 +143,7 @@ impl Engine {
             table_ix: HashMap::new(),
             tables: Vec::new(),
             batch_oldest: Vec::new(),
+            sink_used: Instant::now(),
         }
     }
 
@@ -154,6 +157,25 @@ impl Engine {
     pub fn set_sink(&mut self, sink: Box<dyn CacheSink>) {
         self.sink = sink;
         self.consecutive_failures = 0;
+        self.sink_used = Instant::now();
+    }
+
+    /// Keep the cache connection warm: `PING` it when it has gone `every` or longer without a
+    /// round trip (`Duration::ZERO`: always). A connection left idle can make the next round trip
+    /// pay for itself going cold; in the first pp pilot one flush after a quiet spell took
+    /// 250-500 ms against a few ms for the rest. `Ok(true)` when a ping was sent.
+    ///
+    /// # Errors
+    ///
+    /// The ping failed: the caller reconnects now, before a flush needs the connection.
+    pub fn keep_warm(&mut self, every: Duration) -> Result<bool, SinkError> {
+        if self.sink_used.elapsed() < every {
+            return Ok(false);
+        }
+        self.sink.ping()?;
+        self.sink_used = Instant::now();
+        metrics().cache_pings.inc();
+        Ok(true)
     }
 
     /// Current role.
@@ -403,6 +425,7 @@ impl Engine {
                 }
                 self.clear_pending();
                 self.consecutive_failures = 0;
+                self.sink_used = Instant::now();
                 Ok(n)
             }
             Err(e) => {
@@ -427,6 +450,7 @@ impl Engine {
         }
         if let Some(w) = self.watermark_ms {
             self.sink.set_i64(&self.cfg.watermark_key, w)?;
+            self.sink_used = Instant::now();
         }
         self.watermark_written = Some(Instant::now());
         self.watermark_dirty = false;
@@ -670,6 +694,107 @@ mod tests {
         fn eviction_policy(&self) -> Option<String> {
             self.0.eviction_policy()
         }
+    }
+
+    /// A cache connection that goes cold: the first operation after `cold_after` without a round
+    /// trip pays `penalty` first (as the pilot's one slow flush after a quiet spell did).
+    struct ColdSink {
+        inner: Arc<MemorySink>,
+        last: std::sync::Mutex<Instant>,
+        cold_after: Duration,
+        penalty: Duration,
+    }
+    impl ColdSink {
+        fn touch(&self) {
+            let mut last = self.last.lock().unwrap();
+            if last.elapsed() >= self.cold_after {
+                std::thread::sleep(self.penalty);
+            }
+            *last = Instant::now();
+        }
+    }
+    impl CacheSink for ColdSink {
+        fn invalidate(&self, k: &[String]) -> Result<u64, SinkError> {
+            self.touch();
+            self.inner.invalidate(k)
+        }
+        fn invalidate_matching_page(&self, p: &str, c: i64) -> Result<(i64, u64), SinkError> {
+            self.touch();
+            self.inner.invalidate_matching_page(p, c)
+        }
+        fn get_i64(&self, k: &str) -> Result<Option<i64>, SinkError> {
+            self.touch();
+            self.inner.get_i64(k)
+        }
+        fn set_i64(&self, k: &str, v: i64) -> Result<(), SinkError> {
+            self.touch();
+            self.inner.set_i64(k, v)
+        }
+        fn ping(&self) -> Result<(), SinkError> {
+            self.touch();
+            self.inner.ping()
+        }
+        fn eviction_policy(&self) -> Option<String> {
+            self.inner.eviction_policy()
+        }
+    }
+
+    /// The first flush after an idle spell of four times the cold threshold, with the leader
+    /// loop waking every 10 ms and calling `keep_warm` (or not, the control).
+    fn first_flush_after_idle(keep_warm: bool) -> Duration {
+        let cold_after = Duration::from_millis(60);
+        let s = Arc::new(MemorySink::new());
+        let mut e = Engine::new(
+            cfg(|_| {}),
+            Box::new(ColdSink {
+                inner: s.clone(),
+                last: std::sync::Mutex::new(Instant::now()),
+                cold_after,
+                penalty: Duration::from_millis(300),
+            }),
+        );
+        e.take_over().unwrap();
+        e.catch_up(&mut |_, _, _, _| Ok(vec![])).unwrap();
+        e.keep_warm(Duration::ZERO).unwrap();
+        let idle_until = Instant::now() + cold_after * 4;
+        while Instant::now() < idle_until {
+            if keep_warm {
+                e.keep_warm(Duration::from_millis(20)).unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        s.put("lg:t:1", "x");
+        e.push(&change("t", "1", 1));
+        let t = Instant::now();
+        assert_eq!(e.flush().unwrap(), 1);
+        assert!(!s.contains("lg:t:1"));
+        t.elapsed()
+    }
+
+    #[test]
+    fn keep_warm_keeps_the_first_flush_after_idle_fast() {
+        let cold = first_flush_after_idle(false);
+        assert!(
+            cold >= Duration::from_millis(300),
+            "control: without keep-alive the first flush after idle pays the cold penalty ({cold:?})"
+        );
+        let warm = first_flush_after_idle(true);
+        assert!(
+            warm < Duration::from_millis(50),
+            "first flush after an idle spell took {warm:?} with keep-alive"
+        );
+    }
+
+    #[test]
+    fn keep_warm_pings_only_when_idle_long_enough() {
+        let (mut e, s) = engine(cfg(|_| {}));
+        assert!(e.keep_warm(Duration::ZERO).unwrap(), "ZERO always pings");
+        assert!(!e.keep_warm(Duration::from_mins(1)).unwrap(), "just used");
+        s.set_failing(Some("connection reset"));
+        assert!(
+            e.keep_warm(Duration::ZERO).is_err(),
+            "a failed ping is reported"
+        );
     }
 
     fn engine(c: Arc<Config>) -> (Engine, Arc<MemorySink>) {
