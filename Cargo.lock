@@ -490,7 +490,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "may"
 version = "0.3.51"
-source = "git+https://github.com/microscaler/may.git?branch=master#2156e046291dfd568797f10630ffbc74694d33aa"
+source = "git+https://github.com/microscaler/may.git?rev=2156e046291dfd568797f10630ffbc74694d33aa#2156e046291dfd568797f10630ffbc74694d33aa"
 dependencies = [
  "cfg-if",
  "core_affinity",
@@ -511,7 +511,7 @@ dependencies = [
 [[package]]
 name = "may-redis"
 version = "0.1.0"
-source = "git+https://github.com/microscaler/may_redis.git?rev=3889ac42dfe7b9e8e4ae984dccc3936193a24379#3889ac42dfe7b9e8e4ae984dccc3936193a24379"
+source = "git+https://github.com/microscaler/may_redis.git?rev=611620ccff2db71b61dd7c7505e882881d55ff79#611620ccff2db71b61dd7c7505e882881d55ff79"
 dependencies = [
  "bytes",
  "itoa",
@@ -544,7 +544,7 @@ dependencies = [
 [[package]]
 name = "may_queue"
 version = "0.1.24"
-source = "git+https://github.com/microscaler/may.git?branch=master#2156e046291dfd568797f10630ffbc74694d33aa"
+source = "git+https://github.com/microscaler/may.git?rev=2156e046291dfd568797f10630ffbc74694d33aa#2156e046291dfd568797f10630ffbc74694d33aa"
 dependencies = [
  "crossbeam-utils",
  "rustversion",
