@@ -511,7 +511,7 @@ dependencies = [
 [[package]]
 name = "may-redis"
 version = "0.1.0"
-source = "git+https://github.com/microscaler/may_redis.git?rev=611620ccff2db71b61dd7c7505e882881d55ff79#611620ccff2db71b61dd7c7505e882881d55ff79"
+source = "git+https://github.com/microscaler/may_redis.git?rev=5390b28309c87b4a9859f29eee473ea66468d448#5390b28309c87b4a9859f29eee473ea66468d448"
 dependencies = [
  "bytes",
  "itoa",

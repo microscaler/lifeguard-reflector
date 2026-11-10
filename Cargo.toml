@@ -18,7 +18,7 @@ path = "src/main.rs"
 # for the whole process.
 may = "0.3"
 may_postgres = { git = "https://github.com/microscaler/may_postgres.git", branch = "integration/microscaler-fork" }
-may-redis = { git = "https://github.com/microscaler/may_redis.git", rev = "611620ccff2db71b61dd7c7505e882881d55ff79" }
+may-redis = { git = "https://github.com/microscaler/may_redis.git", rev = "5390b28309c87b4a9859f29eee473ea66468d448" }
 serde_json = "1.0"
 log = "0.4"
 env_logger = "0.11"
@@ -29,7 +29,7 @@ microscaler-timing = { git = "https://github.com/microscaler/microscaler-observa
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
-# One `may` for the whole process. may_redis (from 611620c) depends on crates.io `may` and needs the microscaler
+# One `may` for the whole process. may_redis (from 611620c; now 5390b28) depends on crates.io `may` and needs the microscaler
 # fork's `spsc::Receiver::recv_with_timeout`, so every consumer patches crates.io `may` to the fork. With the same pinned
 # rev in every consumer the graph holds one `may` and so one scheduler; move this rev in step with theirs. Drop when the
 # API lands in a may release.
