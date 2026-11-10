@@ -85,6 +85,12 @@ pub struct Engine {
     /// The catch-up in progress, worked through a step at a time between live flushes.
     catch_up_plan: Option<CatchUpPlan>,
     consecutive_failures: u32,
+    /// Table name -> index into `tables` / `batch_oldest`; at most `MAX_TABLES` + 1 entries.
+    table_ix: HashMap<String, usize>,
+    /// Per-table metric handles, resolved on a table's first notification.
+    tables: Vec<crate::metrics::TableMetrics>,
+    /// Leader: oldest trigger ts of each table in the pending batch.
+    batch_oldest: Vec<Option<i64>>,
 }
 
 /// One unit of catch-up work.
@@ -132,6 +138,9 @@ impl Engine {
             needs_catch_up: false,
             catch_up_plan: None,
             consecutive_failures: 0,
+            table_ix: HashMap::new(),
+            tables: Vec::new(),
+            batch_oldest: Vec::new(),
         }
     }
 
@@ -197,21 +206,49 @@ impl Engine {
 
     /// Decode and record one notification payload. Invalid payloads are counted and dropped.
     pub fn push_payload(&mut self, raw: &str) {
+        #[allow(clippy::cast_precision_loss)]
+        metrics().payload_bytes.observe(raw.len() as f64);
         match payload::parse(raw) {
             Ok(c) => self.push(&c),
             Err(e) => {
                 metrics().invalid_payloads.inc();
-                log::warn!("lifereflector: dropping notification: {e}");
+                log::warn!("lifereflector: event=invalid_payload {e}");
             }
         }
     }
 
+    /// Index of a table's metric handles, resolving them on its first change. Beyond
+    /// [`crate::metrics::MAX_TABLES`] distinct tables every further one is
+    /// [`crate::metrics::OTHER_TABLE`].
+    fn table_index(&mut self, table: &str) -> usize {
+        if let Some(&i) = self.table_ix.get(table) {
+            return i;
+        }
+        let label = if self.table_ix.len() >= crate::metrics::MAX_TABLES {
+            crate::metrics::OTHER_TABLE
+        } else {
+            table
+        };
+        if let Some(&i) = self.table_ix.get(label) {
+            return i;
+        }
+        let i = self.tables.len();
+        self.tables.push(metrics().table(label));
+        self.batch_oldest.push(None);
+        self.table_ix.insert(label.to_owned(), i);
+        i
+    }
+
     /// Record one change.
     pub fn push(&mut self, c: &Change) {
-        metrics()
-            .notifications
-            .with_label_values(&[c.table.as_str()])
-            .inc();
+        let ti = self.table_index(&c.table);
+        self.tables[ti].notifications.inc();
+        if let Some(t) = c.ts_ms {
+            #[allow(clippy::cast_precision_loss)]
+            self.tables[ti]
+                .notify_seconds
+                .observe((now_ms() - t).max(0) as f64 / 1000.0);
+        }
         let ts = c.ts_ms.unwrap_or(0);
         match self.role {
             Role::Standby => {
@@ -247,6 +284,8 @@ impl Engine {
                 if let Some(t) = c.ts_ms {
                     self.oldest_ts = Some(self.oldest_ts.map_or(t, |o| o.min(t)));
                     self.newest_ts = Some(self.newest_ts.map_or(t, |n| n.max(t)));
+                    let o = &mut self.batch_oldest[ti];
+                    *o = Some(o.map_or(t, |x| x.min(t)));
                 }
                 if self.first_at.is_none() {
                     self.first_at = Some(Instant::now());
@@ -256,7 +295,7 @@ impl Engine {
                     // and invalidate by catch-up once it is back.
                     metrics().overflows.inc();
                     log::warn!(
-                        "lifereflector: {} pending keys exceed LIFEREFLECTOR_MAX_PENDING; scheduling catch-up",
+                        "lifereflector: event=overflow pending={} exceeds LIFEREFLECTOR_MAX_PENDING; scheduling catch-up",
                         self.pending.len()
                     );
                     self.clear_pending();
@@ -276,6 +315,7 @@ impl Engine {
         self.oldest_ts = None;
         self.newest_ts = None;
         self.first_at = None;
+        self.batch_oldest.fill(None);
         metrics().pending.set(0);
     }
 
@@ -332,6 +372,16 @@ impl Engine {
                 if let Some(received) = self.first_at {
                     // NOTIFY received (the batch's first) to the invalidation applied in Redis.
                     NOTIFY_TO_APPLIED.record(Outcome::Ok, received.elapsed());
+                    m.apply_seconds.observe(received.elapsed().as_secs_f64());
+                }
+                let now = now_ms();
+                for (i, oldest) in self.batch_oldest.iter().enumerate() {
+                    if let Some(o) = oldest {
+                        #[allow(clippy::cast_precision_loss)]
+                        self.tables[i]
+                            .lag_seconds
+                            .observe((now - o).max(0) as f64 / 1000.0);
+                    }
                 }
                 #[allow(clippy::cast_precision_loss)]
                 m.batch_size.observe(n as f64);
@@ -432,6 +482,7 @@ impl Engine {
         self.retained_since_ms = now_ms();
         self.catch_up_plan = None;
         metrics().leader.set(0);
+        log::info!("lifereflector: event=leader state=released");
     }
 
     /// Bring the cache back in line after missed notifications (see the module docs), all at
@@ -487,6 +538,7 @@ impl Engine {
                 m.catch_up_keys.inc_by(n);
                 if next == 0 {
                     m.catch_ups.with_label_values(&[*mode]).inc();
+                    log::info!("lifereflector: event=catch_up mode={mode} done");
                     plan.tasks.pop_front();
                 } else {
                     *cursor = next;
@@ -503,7 +555,7 @@ impl Engine {
                     Ok(_) => None,
                     Err(e) => {
                         log::warn!(
-                            "lifereflector: ranged catch-up of {} failed ({e}); flushing it",
+                            "lifereflector: event=catch_up mode=ranged table={} failed ({e}); flushing it",
                             spec.table
                         );
                         None
@@ -516,6 +568,10 @@ impl Engine {
                     let n = self.sink.invalidate(&keys)?;
                     m.catch_ups.with_label_values(&["ranged"]).inc();
                     m.catch_up_keys.inc_by(n);
+                    log::info!(
+                        "lifereflector: event=catch_up mode=ranged table={} keys={n} done",
+                        spec.table
+                    );
                     if let Some(plan) = self.catch_up_plan.as_mut() {
                         plan.tasks.pop_front();
                     }
@@ -874,5 +930,55 @@ mod tests {
         e.push_payload("{oops");
         assert_eq!(metrics().invalid_payloads.get(), before + 1);
         assert!(e.is_empty());
+    }
+
+    #[test]
+    fn per_table_notify_lag_and_apply_are_recorded() {
+        let (mut e, _s) = engine(cfg(|_| {}));
+        e.take_over().unwrap();
+        e.catch_up(&mut |_, _, _, _| Ok(vec![])).unwrap();
+        let m = metrics();
+        let lag = m.table_lag_seconds.with_label_values(&["lagtab"]);
+        let notify = m.notify_seconds.with_label_values(&["lagtab"]);
+        let (l0, s0, n0) = (
+            lag.get_sample_count(),
+            lag.get_sample_sum(),
+            notify.get_sample_count(),
+        );
+        let a0 = m.apply_seconds.get_sample_count();
+        let t = now_ms() - 40;
+        e.push(&change("lagtab", "1", t));
+        e.push(&change("lagtab", "2", t + 10));
+        e.flush().unwrap();
+        assert_eq!(notify.get_sample_count() - n0, 2, "one per notification");
+        assert_eq!(lag.get_sample_count() - l0, 1, "one per table per batch");
+        assert!(
+            lag.get_sample_sum() - s0 >= 0.039,
+            "the table's oldest change"
+        );
+        assert!(m.apply_seconds.get_sample_count() > a0);
+        // A batch without the table records nothing for it.
+        e.push(&change("lagtab_other", "1", now_ms()));
+        e.flush().unwrap();
+        assert_eq!(lag.get_sample_count() - l0, 1);
+    }
+
+    #[test]
+    fn table_labels_are_bounded() {
+        let (mut e, _s) = engine(cfg(|c| c.max_pending = 10_000));
+        for i in 0..crate::metrics::MAX_TABLES + 10 {
+            e.push(&change(&format!("bound_{i}"), "1", now_ms()));
+        }
+        assert_eq!(e.table_ix.len(), crate::metrics::MAX_TABLES + 1);
+        assert!(e.table_ix.contains_key(crate::metrics::OTHER_TABLE));
+        assert_eq!(e.tables.len(), e.table_ix.len());
+    }
+
+    #[test]
+    fn payload_size_is_observed() {
+        let (mut e, _s) = engine(cfg(|_| {}));
+        let before = metrics().payload_bytes.get_sample_count();
+        e.push_payload(r#"{"table":"items","op":"UPDATE","id":1,"v":1,"ts":1}"#);
+        assert!(metrics().payload_bytes.get_sample_count() > before);
     }
 }

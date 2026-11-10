@@ -84,7 +84,16 @@ matter, keep the TTL short for that entity or read it from Postgres.
 (trigger time to invalidation done), `lifereflector_reconnects_total{target}`,
 `lifereflector_catch_ups_total{mode}`, `lifereflector_catch_up_keys_total`,
 `lifereflector_overflows_total`, `lifereflector_leader`, `lifereflector_pending_keys`,
-`lifereflector_watermark_ms`.
+`lifereflector_watermark_ms`, `lifereflector_notify_seconds{table}` (trigger time to
+notification received), `lifereflector_table_lag_seconds{table}` (trigger time to invalidation
+done, per table), `lifereflector_apply_seconds` (received to invalidation done),
+`lifereflector_payload_bytes`, `lifereflector_channels_configured` and
+`lifereflector_channels_listening`. Per-table handles are resolved on a table's first
+notification; at most 256 tables get their own label, the rest count as `table="_other"`.
+
+Notable events are logged as one line each with an `event=` field (`leader`, `take_over`,
+`catch_up`, `reconnect`, `overflow`, `cache_error`, `invalid_payload`), so a log query can list
+them.
 
 ## Runtime
 

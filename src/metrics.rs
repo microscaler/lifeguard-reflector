@@ -4,8 +4,8 @@
 //! atomics. Label cardinality is bounded by the number of tables that publish notifications.
 
 use prometheus::{
-    Encoder, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
-    TextEncoder,
+    Encoder, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts,
+    Registry, TextEncoder,
 };
 use std::io::{Read, Write};
 use std::sync::OnceLock;
@@ -45,6 +45,48 @@ pub struct Metrics {
     pub pending: IntGauge,
     /// Last processed trigger timestamp (ms since epoch).
     pub watermark_ms: IntGauge,
+    /// Trigger time to notification received, by table.
+    pub notify_seconds: HistogramVec,
+    /// Trigger time to invalidation done, by table (the table's oldest change in the batch).
+    pub table_lag_seconds: HistogramVec,
+    /// Notification received (the batch's first) to invalidation done.
+    pub apply_seconds: Histogram,
+    /// NOTIFY payload size in bytes (Postgres refuses payloads of 8000 bytes or more).
+    pub payload_bytes: Histogram,
+    /// Channels configured (`LIFEREFLECTOR_CHANNELS`).
+    pub channels_configured: IntGauge,
+    /// Channels this instance is currently `LISTEN`ing on (0 between sessions).
+    pub channels_listening: IntGauge,
+}
+
+/// Most distinct `table` label values; changes for further tables are counted as [`OTHER_TABLE`].
+/// The table name comes from the payload, so this bounds the cardinality whatever is published.
+pub const MAX_TABLES: usize = 256;
+/// The `table` label beyond [`MAX_TABLES`].
+pub const OTHER_TABLE: &str = "_other";
+
+/// Handles for one table, resolved once (see `Engine`), so the per-notification path is atomic
+/// adds only.
+pub struct TableMetrics {
+    /// `lifereflector_notifications_total{table}`.
+    pub notifications: IntCounter,
+    /// `lifereflector_notify_seconds{table}`.
+    pub notify_seconds: Histogram,
+    /// `lifereflector_table_lag_seconds{table}`.
+    pub lag_seconds: Histogram,
+}
+
+fn histogram_vec(
+    r: &Registry,
+    name: &str,
+    help: &str,
+    buckets: Vec<f64>,
+    labels: &[&str],
+) -> HistogramVec {
+    let h = HistogramVec::new(HistogramOpts::new(name, help).buckets(buckets), labels)
+        .expect("valid metric");
+    r.register(Box::new(h.clone())).expect("unique metric");
+    h
 }
 
 fn counter_vec(r: &Registry, name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
@@ -77,6 +119,7 @@ const LATENCY_BUCKETS: [f64; 14] = [
 ];
 
 impl Metrics {
+    #[allow(clippy::too_many_lines)] // one flat list of metric definitions
     fn new() -> Self {
         let r = Registry::new();
         Self {
@@ -169,7 +212,53 @@ impl Metrics {
                 "lifereflector_watermark_ms",
                 "Trigger timestamp of the newest processed change (ms since epoch)",
             ),
+            notify_seconds: histogram_vec(
+                &r,
+                "lifereflector_notify_seconds",
+                "Trigger time to notification received, by table",
+                LATENCY_BUCKETS.to_vec(),
+                &["table"],
+            ),
+            table_lag_seconds: histogram_vec(
+                &r,
+                "lifereflector_table_lag_seconds",
+                "Trigger time to invalidation done, by table (oldest change of the table in the batch)",
+                LATENCY_BUCKETS.to_vec(),
+                &["table"],
+            ),
+            apply_seconds: histogram(
+                &r,
+                "lifereflector_apply_seconds",
+                "Notification received (the batch's first) to invalidation done",
+                LATENCY_BUCKETS.to_vec(),
+            ),
+            payload_bytes: histogram(
+                &r,
+                "lifereflector_payload_bytes",
+                "NOTIFY payload size in bytes",
+                vec![32.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8000.0],
+            ),
+            channels_configured: gauge(
+                &r,
+                "lifereflector_channels_configured",
+                "NOTIFY channels configured",
+            ),
+            channels_listening: gauge(
+                &r,
+                "lifereflector_channels_listening",
+                "NOTIFY channels currently listened on",
+            ),
             registry: r,
+        }
+    }
+
+    /// Resolve the handles for one table label.
+    #[must_use]
+    pub fn table(&self, table: &str) -> TableMetrics {
+        TableMetrics {
+            notifications: self.notifications.with_label_values(&[table]),
+            notify_seconds: self.notify_seconds.with_label_values(&[table]),
+            lag_seconds: self.table_lag_seconds.with_label_values(&[table]),
         }
     }
 

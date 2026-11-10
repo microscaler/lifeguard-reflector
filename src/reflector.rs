@@ -83,6 +83,9 @@ pub fn run(cfg: Config, connect_sink: &SinkFactory, stop: &AtomicBool) -> Result
         cfg.channels,
         cfg.lock_key
     );
+    metrics()
+        .channels_configured
+        .set(i64::try_from(cfg.channels.len()).unwrap_or(i64::MAX));
     let mut engine = Engine::new(cfg.clone(), sink);
     let mut backoff = Duration::from_millis(200);
     while !stop.load(Ordering::Relaxed) {
@@ -90,7 +93,8 @@ pub fn run(cfg: Config, connect_sink: &SinkFactory, stop: &AtomicBool) -> Result
         match session(&cfg, &mut engine, connect_sink, stop) {
             Ok(()) => break,
             Err(e) => {
-                log::warn!("lifereflector: session ended: {e}");
+                log::warn!("lifereflector: event=reconnect target=postgres session ended: {e}");
+                metrics().channels_listening.set(0);
                 engine.step_down();
                 metrics().reconnects.with_label_values(&["postgres"]).inc();
                 if started.elapsed() > Duration::from_secs(30) {
@@ -141,6 +145,9 @@ fn session(
     client
         .batch_execute(&listen)
         .map_err(|e| format!("LISTEN: {}", pg_err(&e)))?;
+    metrics()
+        .channels_listening
+        .set(i64::try_from(cfg.channels.len()).unwrap_or(i64::MAX));
     let try_lock = client
         .prepare("SELECT pg_try_advisory_lock($1)")
         .map_err(|e| pg_err(&e))?;
@@ -168,14 +175,14 @@ fn session(
         wait_for_notification(&client, engine, next_try);
     }
     metrics().leader.set(1);
-    log::info!("lifereflector: acquired leadership");
+    log::info!("lifereflector: event=leader state=acquired");
     drain(&client, engine, usize::MAX);
     match engine.take_over() {
         Ok(TakeOver::Gapless) => log::info!(
-            "lifereflector: standby buffer covers the gap; {} keys to invalidate",
+            "lifereflector: event=take_over mode=gapless keys={} (the standby buffer covers the gap)",
             engine.len()
         ),
-        Ok(TakeOver::CatchUp) => log::info!("lifereflector: catch-up required"),
+        Ok(TakeOver::CatchUp) => log::info!("lifereflector: event=take_over mode=catch_up"),
         Err(e) => {
             log::warn!("lifereflector: reading watermark failed ({e}); catch-up scheduled");
         }
@@ -330,16 +337,17 @@ fn cache_failed(
     backoff: &mut Duration,
     retry_at: &mut Instant,
 ) {
-    log::warn!("lifereflector: cache operation failed: {e}");
+    log::warn!("lifereflector: event=cache_error {e}");
     *backoff = (*backoff * 2).clamp(Duration::from_millis(50), Duration::from_secs(5));
     *retry_at = Instant::now() + *backoff;
     if engine.consecutive_failures() >= 3 || engine.needs_catch_up() {
         match connect_sink() {
             Ok(s) => {
                 metrics().reconnects.with_label_values(&["redis"]).inc();
+                log::info!("lifereflector: event=reconnect target=redis");
                 engine.set_sink(s);
             }
-            Err(e) => log::warn!("lifereflector: cache reconnect failed: {e}"),
+            Err(e) => log::warn!("lifereflector: event=reconnect target=redis failed: {e}"),
         }
     }
 }
