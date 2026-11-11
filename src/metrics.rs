@@ -318,3 +318,45 @@ pub fn serve(addr: &str) -> std::io::Result<()> {
     });
     Ok(())
 }
+
+#[cfg(test)]
+mod exported_name_tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+    use super::metrics;
+
+    /// Every series in the scrape has exactly one type suffix: counters end in `_total` once, and
+    /// no unit is doubled (`_seconds_seconds`, `_bytes_bytes`). The registry is the prometheus crate
+    /// (it adds no suffixes), so names are exported exactly as written; this keeps them that way.
+    #[test]
+    fn exported_names_have_exactly_one_suffix() {
+        let m = metrics();
+        let t = m.table("exported_name_test");
+        t.notifications.inc();
+        t.notify_seconds.observe(0.001);
+        t.lag_seconds.observe(0.001);
+        m.invalid_payloads.inc();
+        m.flushes.with_label_values(&["ok"]).inc();
+        let text = m.scrape_text();
+        let mut names: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+            .filter_map(|l| l.split(['{', ' ']).next())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        assert!(
+            names.contains(&"lifereflector_notifications_total"),
+            "{names:?}"
+        );
+        assert!(names.contains(&"lifereflector_flushes_total"), "{names:?}");
+        for n in names {
+            for doubled in ["_total_total", "_seconds_seconds", "_bytes_bytes", "_ms_ms"] {
+                assert!(!n.contains(doubled), "doubled suffix in {n}");
+            }
+            assert!(
+                n.matches("_total").count() <= 1,
+                "more than one _total in {n}"
+            );
+        }
+    }
+}
