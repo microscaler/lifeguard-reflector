@@ -230,8 +230,12 @@ impl Engine {
     pub fn push_payload(&mut self, raw: &str) {
         #[allow(clippy::cast_precision_loss)]
         metrics().payload_bytes.observe(raw.len() as f64);
-        match payload::parse(raw) {
-            Ok(c) => self.push(&c),
+        match payload::parse_many(raw) {
+            Ok(changes) => {
+                for c in &changes {
+                    self.push(c);
+                }
+            }
             Err(e) => {
                 metrics().invalid_payloads.inc();
                 log::warn!("lifereflector: event=invalid_payload {e}");

@@ -128,3 +128,11 @@ LifeReflector is source-available under the
 Any use other than a competing product or service is permitted. Each version
 converts to the Apache License, Version 2.0 two years after it is released.
 [Lifeguard](https://github.com/microscaler/lifeguard) itself is MIT OR Apache-2.0.
+
+## Statement-level payloads
+
+Tables whose triggers are generated with `#[notify(.., granularity = "statement")]` publish one
+notification per statement with the touched keys in `"ids": [..]` (split under PostgreSQL's
+8000-byte limit). LifeReflector expands each into one invalidation per key, coalesced with the
+rest of the batch, so a 500-row `UPDATE` costs one or two notifications and one multi-key
+`UNLINK`. Deploy this version before switching a table to statement granularity.

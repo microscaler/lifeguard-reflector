@@ -5,6 +5,10 @@
 //! The key is a JSON string or number depending on the column type; it is normalised to its text
 //! form, which is also how cache keys spell it. `v` and `ts` are optional so payloads from older
 //! triggers still parse: they lose stale-event detection and lag metrics, nothing else.
+//!
+//! Statement-level triggers (`#[notify(.., granularity = "statement")]`) publish
+//! `{"table", "op", "ids": [<key>, ..], "v", "ts"}` instead: one payload for the keys a statement
+//! touched. [`parse_many`] turns either shape into one [`Change`] per key.
 
 use serde_json::Value;
 
@@ -74,7 +78,57 @@ impl std::fmt::Display for PayloadError {
 
 impl std::error::Error for PayloadError {}
 
-/// Decode one payload.
+/// Decode one payload into one change per key: a row payload (`id`) gives one, a statement
+/// payload (`ids`) one per element, all with the same `table`, `op`, `v` and `ts`.
+///
+/// # Errors
+///
+/// [`PayloadError`] when the payload is not the contract above, or an `ids` element is not a
+/// string or number.
+pub fn parse_many(payload: &str) -> Result<Vec<Change>, PayloadError> {
+    let value: Value =
+        serde_json::from_str(payload).map_err(|e| PayloadError::Malformed(e.to_string()))?;
+    let Some(ids) = value.get("ids").cloned() else {
+        return parse(payload).map(|c| vec![c]);
+    };
+    let Value::Array(ids) = ids else {
+        return Err(PayloadError::Field("ids"));
+    };
+    let Value::Object(map) = value else {
+        return Err(PayloadError::Malformed("top level is not an object".into()));
+    };
+    let table = map
+        .get("table")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+        .ok_or(PayloadError::Field("table"))?
+        .to_owned();
+    let op_text = map
+        .get("op")
+        .and_then(Value::as_str)
+        .ok_or(PayloadError::Field("op"))?;
+    let op = Op::parse(op_text).ok_or_else(|| PayloadError::Op(op_text.to_owned()))?;
+    let version = map.get("v").and_then(Value::as_i64);
+    let ts_ms = map.get("ts").and_then(Value::as_i64);
+    ids.into_iter()
+        .map(|k| {
+            let id = match k {
+                Value::String(s) if !s.is_empty() => s,
+                Value::Number(n) => n.to_string(),
+                _ => return Err(PayloadError::Field("ids")),
+            };
+            Ok(Change {
+                table: table.clone(),
+                op,
+                id,
+                version,
+                ts_ms,
+            })
+        })
+        .collect()
+}
+
+/// Decode one row payload (`id`).
 ///
 /// # Errors
 ///
@@ -134,6 +188,41 @@ mod tests {
         assert_eq!(c.id, "6f1c-uuid");
         assert_eq!(c.version, None);
         assert_eq!(c.ts_ms, None);
+    }
+
+    #[test]
+    fn statement_payload_gives_one_change_per_key() {
+        let cs = parse_many(
+            r#"{"table":"items","op":"UPDATE","ids":[1,"2b",3],"v":9,"ts":1700000000000}"#,
+        )
+        .unwrap();
+        assert_eq!(cs.len(), 3);
+        assert_eq!(
+            cs.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["1", "2b", "3"]
+        );
+        assert!(cs
+            .iter()
+            .all(|c| c.table == "items" && c.op == Op::Update && c.version == Some(9)));
+        // A row payload through parse_many is one change.
+        let one = parse_many(r#"{"table":"t","op":"DELETE","id":7}"#).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id, "7");
+        // Empty ids: nothing to do, not an error.
+        assert_eq!(
+            parse_many(r#"{"table":"t","op":"INSERT","ids":[]}"#)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            parse_many(r#"{"table":"t","op":"INSERT","ids":[null]}"#),
+            Err(PayloadError::Field("ids"))
+        );
+        assert_eq!(
+            parse_many(r#"{"table":"t","op":"INSERT","ids":5}"#),
+            Err(PayloadError::Field("ids"))
+        );
     }
 
     #[test]
