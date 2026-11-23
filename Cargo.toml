@@ -18,7 +18,7 @@ path = "src/main.rs"
 # for the whole process.
 may = "0.3"
 may_postgres = { git = "https://github.com/microscaler/may_postgres.git", tag = "v0.1.2" }
-may-redis = { git = "https://github.com/microscaler/may_redis.git", tag = "v0.1.3" }
+may-redis = { git = "https://github.com/microscaler/may_redis.git", tag = "v0.1.2" }
 serde_json = "1.0"
 log = "0.4"
 env_logger = "0.11"
